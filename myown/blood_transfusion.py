@@ -19,18 +19,16 @@ def create_data():
     labels.append(float(element[-1]))
 
   features = np.array(features)
-  feature_names = ['recency', 'frequency', 'monetary', 'time']
   new_features = {}
 
   for i in range(features.shape[1]):
     max_value = np.max(features[:, i])
     features[:, i] = (features[:, i] - max_value / 2) / max_value * 2
-    new_features[feature_names[i]] = features[:, i]
   
-  return new_features, labels
+  return (features[:600], labels[:600]), (features[600:], labels[600:])
 
-def _input_fn(features, labels, batch_size):
-  dataset = tf.data.Dataset.from_tensor_slices((features, labels))
+def _input_fn(keys, features, labels, batch_size):
+  dataset = tf.data.Dataset.from_tensor_slices((dict(zip(keys, features.T)), labels))
   dataset = dataset.shuffle(800).repeat().batch(batch_size)
   
   iterator = dataset.make_one_shot_iterator()
@@ -46,9 +44,15 @@ my_feature_columns = [recency_feature, frequency_feature, monetary_feature, time
 
 classifier = tf.estimator.DNNClassifier(
   feature_columns=my_feature_columns,
-  hidden_units=[10, 10])
+  hidden_units=[10, 10],
+  model_dir='model')
 
-features, labels = create_data()
+(train_x, train_y), (test_x, test_y) = create_data()
+feature_names = ['recency', 'frequency', 'monetary', 'time']
 classifier.train(
-  input_fn=lambda: _input_fn(features, labels, 100),
+  input_fn=lambda: _input_fn(feature_names, train_x, train_y, 100),
   steps=10000)
+eval_result = classifier.evaluate(
+  input_fn=lambda: _input_fn(feature_names, test_x, test_y, 300),
+  steps=1)
+print('\nTest set accuracy: {accuracy:0.3f}\n'.format(**eval_result))
