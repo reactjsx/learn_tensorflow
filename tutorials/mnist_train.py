@@ -1,4 +1,4 @@
-import numpy
+import numpy as np
 import tensorflow as tf
 
 tf.logging.set_verbosity(tf.logging.INFO)
@@ -8,6 +8,7 @@ def load_data():
 
 def _input_fn(features, labels, batch_size):
     features = (features - 127) / 127.
+    labels = labels.astype(np.int32)
     features = {'x': features}
     dataset = tf.data.Dataset.from_tensor_slices((dict(features), labels))
     dataset = dataset.shuffle(70000).repeat().batch(batch_size)
@@ -86,14 +87,14 @@ def main(argv):
     mnist_classifier = tf.estimator.Estimator(
             model_fn=cnn_model_fn,
             model_dir='model/mnist')
-    mnist_classifier.train(
-            input_fn=lambda: _input_fn(train_data, train_labels, 100),
-            steps=20000,
-            hooks=[logging_hook])
+    #mnist_classifier.train(
+    #        input_fn=lambda: _input_fn(train_data, train_labels, 100),
+    #        steps=20000,
+    #        hooks=[logging_hook])
 
     # Evaluate the model
     eval_results = mnist_classifier.evaluate(
-            input_fn=lambda: _input_fn(eval_data, eval_labels, None))
+            input_fn=lambda: _input_fn(eval_data, eval_labels, 1000))
     print(eval_results)
 
 
