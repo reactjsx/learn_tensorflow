@@ -1,5 +1,5 @@
 import numpy
-import tensorflow
+import tensorflow as tf
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -7,6 +7,7 @@ def load_data():
     return tf.keras.datasets.mnist.load_data()
 
 def _input_fn(features, labels, batch_size):
+    features = (features - 127) / 127.
     features = {'x': features}
     dataset = tf.data.Dataset.from_tensor_slices((dict(features), labels))
     dataset = dataset.shuffle(70000).repeat().batch(batch_size)
@@ -16,7 +17,7 @@ def _input_fn(features, labels, batch_size):
 
 def cnn_model_fn(features, labels, mode):
     # Input layer: shape [batch_size, image_height, image_width, channels]
-    input_laye = tf.reshape(features['x'], [-1, 28, 28, 1])
+    input_layer = tf.reshape(features['x'], [-1, 28, 28, 1])
 
     # Convolution Layer 1
     conv1 = tf.layers.conv2d(
