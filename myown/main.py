@@ -60,6 +60,8 @@ class MyModel(object):
     logits = tf.nn.xw_plus_b(output, softmax_w, softmax_b)
     logits = tf.reshape(logits, [self.batch_size, self.num_steps, vocab_size])
 
+    self._logits = tf.identity(logits, name='logits')
+
     loss = tf.contrib.seq2seq.sequence_loss(
       logits,
       input_.targets,
@@ -155,6 +157,7 @@ class MyModel(object):
   def export_ops(self, name):
     self._name = name
     ops = {util.with_prefix(self._name, 'cost'): self._cost}
+    tf.add_to_collection(util.with_prefix(self._name, 'logits'), self._logits)
     if self._is_training:
       ops.update(lr=self._lr, new_lr=self._new_lr, lr_update=self._lr_update)
       if self._rnn_params:
@@ -182,6 +185,7 @@ class MyModel(object):
           base_variable_scope='Model/RNN')
         tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
     self._cost = tf.get_collection_ref(util.with_prefix(self._name, 'cost'))[0]
+    self._logits = tf.get_collection_ref(util.with_prefix(self._name, 'logits'))[0]
     num_replicas = FLAGS.num_gpus if self._name == 'Train' else 1
     self._initial_state = util.import_state_tuples(
       self._initial_state, self._initial_state_name, num_replicas)
@@ -199,6 +203,10 @@ class MyModel(object):
   @property
   def cost(self):
     return self._cost
+
+  @property
+  def logits(self):
+    return self._logits
 
   @property
   def final_state(self):
@@ -230,20 +238,21 @@ class Config(object):
   hidden_size = 1500
   max_epoch = 14
   max_max_epoch = 55
-  keep_prob = 0.35
+  keep_prob = 0.6
   lr_decay = 1 / 1.15
   batch_size = 20
-  vocab_size = 10000
+  vocab_size = 30000
   rnn_mode = BLOCK
 
 
-def run_epoch(session, model, eval_op=None, verbose=False):
+def run_epoch(session, model, id_to_word, eval_op=None, verbose=False):
   start_time = time.time()
   costs = 0.
   iters = 0
   state = session.run(model.initial_state)
 
   fetches = {
+    'logits': model.logits,
     'cost': model.cost,
     'final_state': model.final_state
   }
@@ -258,6 +267,7 @@ def run_epoch(session, model, eval_op=None, verbose=False):
       feed_dict[h] = state[i].h
 
     vals = session.run(fetches, feed_dict)
+    logits = vals['logits']
     cost = vals['cost']
     state = vals['final_state']
 
@@ -269,6 +279,12 @@ def run_epoch(session, model, eval_op=None, verbose=False):
         step * 1. / model.input.epoch_size, np.exp(costs / iters),
         iters * model.input.batch_size * max(1, FLAGS.num_gpus) /
         (time.time() - start_time)))
+      logits = np.argmax(logits, axis=2)
+      seqs = []
+      for seq in logits:
+        sent = ' '.join([id_to_word[word] for word in seq])
+        sent = sent.replace('<eos>', '.').replace('<unk>', '').replace('  ', ' ')
+        print(sent)
 
   return np.exp(costs / iters)
 
@@ -290,13 +306,14 @@ def main(_):
   if FLAGS.num_gpus > len(gpus):
     raise ValueError('Your machine has only {} gpu(s).'.format(len(gpus)))
 
-  raw_data = reader.create_raw_data(FLAGS.data_path)
-  train_data, valid_data, test_data, _ = raw_data
-
   config = get_config()
   eval_config = get_config()
   eval_config.batch_size = 1
   eval_config.num_steps = 1
+
+  raw_data = reader.create_raw_data_harry(config.vocab_size, FLAGS.data_path)
+  train_data, valid_data, test_data, id_to_word = raw_data
+  print(len(train_data))
 
   with tf.Graph().as_default():
     initializer = tf.random_uniform_initializer(-config.init_scale,
@@ -343,13 +360,14 @@ def main(_):
         lr_decay = config.lr_decay ** max(i + 1 - config.max_epoch, 0.)
         m.assign_lr(session, config.learning_rate * lr_decay)
         print('Epoch: {} Learning rate: {:.3f}'.format(i + 1, session.run(m.lr)))
-        train_perplexity = run_epoch(session, m, eval_op=m.train_op,
+        train_perplexity = run_epoch(session, m, id_to_word,
+                                     eval_op=m.train_op,
                                      verbose=True)
         print('Epoch: {} Train Perplexity: {:.3f}'.format(i + 1, train_perplexity))
-        valid_perplexity = run_epoch(session, mvalid)
+        valid_perplexity = run_epoch(session, mvalid, id_to_word)
         print('Epoch: {} Valid Perplexity: {:.3f}'.format(i + 1, valid_perplexity))
 
-      text_perplexity = run_epoch(session, mtest)
+      test_perplexity = run_epoch(session, mtest, id_to_word)
       print('Test Perplexity: {:.3f}'.format(test_perplexity))
 
       if FLAGS.save_path:
