@@ -37,7 +37,7 @@ def _parse_function(filename, label):
   label = tf.cast(label, tf.int64)
   return image_resized, label
 
-def _input_fn(filepath, folder):
+def _read_from_file(filepath, folder):
   train_data = pd.read_csv(filepath_or_buffer=filepath,
                            names=['id', 'breed'],
                            header=0)
@@ -46,10 +46,12 @@ def _input_fn(filepath, folder):
   filenames = [os.path.join(folder, f + '.jpg') for f in filenames]
   labels = train_data[:, 1]
   counter = collections.Counter(labels)
-  all_breed, _ = list(zip(*counter.most_common()))
-  all_breed = dict(zip(all_breed, range(len(all_breed))))
+  all_breed_list, _ = list(zip(*counter.most_common()))
+  all_breed = dict(zip(all_breed_list, range(len(all_breed_list))))
   int_labels = [all_breed[lbl] for lbl in labels]
+  return all_breed_list, all_breed, filenames, int_labels
 
+def _input_fn(filenames, int_labels):
   dataset = tf.data.Dataset.from_tensor_slices((filenames, int_labels))
   dataset = dataset.map(_parse_function)
 
@@ -128,7 +130,8 @@ def net(image):
   return logits
 
 def main(_):
-  image, label = _input_fn('labels.csv', 'train')
+  all_breed_list, all_breed, filenames, int_labels = _read_from_file('labels.csv', 'train')
+  image, label = _input_fn(filenames, int_labels)
 
   logits = net(image)
 
@@ -147,8 +150,14 @@ def main(_):
   for i in range(20000):
     _ = sess.run(train_op)
     if i % 10 == 0:
-      loss_value = sess.run(loss)
+      loss_value, logit_values, label_values = sess.run([loss, logits, label])
       print('Loss: {}'.format(loss_value))
+      logit_values = np.argmax(logit_values, axis=1)
+      label_names = [all_breed_list[i] for i in label_values]
+      logit_names = [all_breed_list[i] for i in logit_values]
+      print('Labels: {}'.format(label_values))
+      print('Logits: {}'.format(logit_values))
+      print('Predicted Breed: {}'.format(logit_names))
 
 if __name__ == '__main__':
   tf.app.run()
