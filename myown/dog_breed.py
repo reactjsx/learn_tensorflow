@@ -8,6 +8,9 @@ import collections
 
 NUM_CLASSES = 120
 BATCH_SIZE = 32
+INITIAL_LEARNING_RATE = 0.001
+NUM_EPOCHS_PER_DECAY = 350
+LEARNING_RATE_DECAY_FACTOR = 0.1
 
 def _create_variable(name, shape, initializer, dtype):
   var = tf.get_variable(
@@ -55,7 +58,7 @@ def _input_fn(filenames, int_labels):
   dataset = tf.data.Dataset.from_tensor_slices((filenames, int_labels))
   dataset = dataset.map(_parse_function)
 
-  iterator = dataset.batch(BATCH_SIZE).make_one_shot_iterator()
+  iterator = dataset.shuffle(20000).repeat().batch(BATCH_SIZE).make_one_shot_iterator()
   next_element = iterator.get_next()
   return next_element
 
@@ -65,11 +68,13 @@ def _conv2d(name, input_, out_channel):
                            shape=[3, 3, input_.get_shape()[-1], out_channel],
                            stddev=5e-2)
     biases = _get_biases('biases', [out_channel], init_value=0.)
+    tf.summary.histogram(name + '_weights', weights)
     conv = tf.nn.conv2d(input_, weights,
                         [1, 1, 1, 1],
                         padding='SAME')
     conv = tf.nn.bias_add(conv, biases)
     conv = tf.nn.relu(conv, name=scope.name)
+    tf.summary.histogram(name, conv)
   return conv
 
 def _pooling2d(name, conv):
@@ -92,13 +97,17 @@ def _dense_and_activate(name, input_, out_channel,
       'weights',
       shape=[in_channel, out_channel],
       stddev=0.04)
+    tf.summary.histogram(name + '_weights', weights)
     biases = _get_biases('biases', [out_channel],
                          init_value=0.1)
     if activate:
-      return activate(tf.matmul(input_, weights) + biases, name=scope.name)
-  return  tf.add(tf.matmul(input_, weights),
-                 biases,
-                 name=scope.name)
+      fc = activate(tf.matmul(input_, weights) + biases, name=scope.name)
+    else:
+      fc = tf.add(tf.matmul(input_, weights),
+                  biases,
+                  name=scope.name)
+    tf.summary.histogram(name, fc)
+    return fc
 
 def net(image):
   conv1_1 = _conv2d('conv1_1', image, 64)
@@ -135,29 +144,46 @@ def main(_):
 
   logits = net(image)
 
+  global_step = tf.train.get_or_create_global_step()
+  decay_steps = int(10222 / BATCH_SIZE * NUM_EPOCHS_PER_DECAY)
+
   cross_entropy_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
     labels=label, logits=logits, name='cross_entropy_loss')
   loss = tf.reduce_mean(cross_entropy_loss, name='loss')
+  tf.summary.scalar('Training Loss', loss)
 
-  lr = tf.constant(0.001)
+  lr = tf.train.exponential_decay(INITIAL_LEARNING_RATE,
+                                  global_step,
+                                  decay_steps,
+                                  LEARNING_RATE_DECAY_FACTOR,
+                                  staircase=True)
+  tf.summary.scalar('Learning Rate', lr)
+  merged = tf.summary.merge_all()
   opt = tf.train.GradientDescentOptimizer(lr)
   grads = opt.compute_gradients(loss)
   train_op = opt.apply_gradients(
-    grads, global_step=tf.train.get_or_create_global_step())
+    grads, global_step)
+
+  saver = tf.train.Saver()
 
   sess = tf.Session()
+  train_writer = tf.summary.FileWriter('model/train', sess.graph)
   sess.run(tf.global_variables_initializer())
   for i in range(20000):
     _ = sess.run(train_op)
-    if i % 10 == 0:
+    summary = sess.run(merged)
+    train_writer.add_summary(summary, i)
+    if i % 100 == 0:
+      print('Iteration: {}'.format(i * BATCH_SIZE))
       loss_value, logit_values, label_values = sess.run([loss, logits, label])
-      print('Loss: {}'.format(loss_value))
+      print('Loss: {}'.format(loss_value / BATCH_SIZE))
       logit_values = np.argmax(logit_values, axis=1)
       label_names = [all_breed_list[i] for i in label_values]
       logit_names = [all_breed_list[i] for i in logit_values]
       print('Labels: {}'.format(label_values))
       print('Logits: {}'.format(logit_values))
       print('Predicted Breed: {}'.format(logit_names))
+      saver.save(sess, 'model/model.ckpt')
 
 if __name__ == '__main__':
   tf.app.run()
