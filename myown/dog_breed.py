@@ -7,8 +7,8 @@ import collections
 #import matplot.pyplot as plt
 
 NUM_CLASSES = 120
-BATCH_SIZE = 32
-INITIAL_LEARNING_RATE = 0.001
+BATCH_SIZE = 120
+INITIAL_LEARNING_RATE = 0.005
 NUM_EPOCHS_PER_DECAY = 350
 LEARNING_RATE_DECAY_FACTOR = 0.1
 
@@ -134,8 +134,12 @@ def net(image):
   pool5 = _pooling2d('pool5', conv5_3)
 
   fc6 = _dense_and_activate('fc6', pool5, 1024, need_flatten=True)
-  fc7 = _dense_and_activate('fc7', fc6, 512)
-  logits = _dense_and_activate('softmax_linear', fc7, NUM_CLASSES, activate=None)
+  fc6_dropout = tf.nn.dropout(fc6, keep_prob=0.7, name='fc6_dropout')
+  tf.summary.histogram('fc6_dropout', fc6_dropout)
+  fc7 = _dense_and_activate('fc7', fc6_dropout, 1024)
+  fc7_dropout = tf.nn.dropout(fc7, keep_prob=0.7, name='fc7_dropout')
+  tf.summary.histogram('fc7_dropout', fc7_dropout)
+  logits = _dense_and_activate('softmax_linear', fc7_dropout, NUM_CLASSES, activate=None)
   return logits
 
 def main(_):
@@ -143,6 +147,9 @@ def main(_):
   image, label = _input_fn(filenames, int_labels)
 
   logits = net(image)
+  correct_preds = tf.equal(tf.argmax(logits, 1), label)
+  accuracy = tf.reduce_mean(tf.cast(correct_preds, tf.float32))
+  tf.summary.scalar('Training Accuracy', accuracy)
 
   global_step = tf.train.get_or_create_global_step()
   decay_steps = int(10222 / BATCH_SIZE * NUM_EPOCHS_PER_DECAY)
@@ -175,8 +182,9 @@ def main(_):
     train_writer.add_summary(summary, i)
     if i % 100 == 0:
       print('Iteration: {}'.format(i * BATCH_SIZE))
-      loss_value, logit_values, label_values = sess.run([loss, logits, label])
+      loss_value, logit_values, label_values, accuracy_value = sess.run([loss, logits, label, accuracy])
       print('Loss: {}'.format(loss_value / BATCH_SIZE))
+      print('Accuracy: {}'.format(accuracy_value))
       logit_values = np.argmax(logit_values, axis=1)
       label_names = [all_breed_list[i] for i in label_values]
       logit_names = [all_breed_list[i] for i in logit_values]
